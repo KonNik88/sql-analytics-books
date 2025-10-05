@@ -1,0 +1,36 @@
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors/IDEs
+.vscode/
+.idea/
+*.iml
+.history/
+*.swp
+*.swo
+*~
+
+# Docker / local env
+pgdata/
+docker-compose.override.yml
+.env
+.env.local
+.env.*.local
+.envrc
+
+# Logs & temp
+*.log
+logs/
+*.tmp
+*.temp
+*.bak
+
+# Project-specific temp outputs
+analytics/run.log
+tuning/*.txt
+tuning/*.out
+
+# Archives you might drop in seeds locally
+seeds/*.zip

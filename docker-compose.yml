@@ -1,0 +1,20 @@
+services:
+  db:
+    build: .
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: appdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init/docker_init.sql:/docker-entrypoint-initdb.d/00_docker_init.sql
+      - ./ddl:/docker-entrypoint-initdb.d/ddl
+      - ./etl:/docker-entrypoint-initdb.d/etl
+      - ./seeds:/docker-entrypoint-initdb.d/seeds
+      - ./analytics:/analytics
+      - ./search:/search
+      - ./tests:/tests
+      - pgdata:/var/lib/postgresql/data
+volumes:
+  pgdata:

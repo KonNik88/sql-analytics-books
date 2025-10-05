@@ -11,7 +11,8 @@ Built from Goodbooks-like CSV seeds and focused on **advanced SQL** and **engine
 - **Quality:** pgTAP tests, CI-friendly layout (GitHub Actions)
 - **Reproducible:** Docker quickstart and alternative run on a remote VM via SSH tunnel
 
-> Seeds are small (LFS-free) so CI remains fast.
+> Seeds are small (LFS-free) so CI remains fast.  
+> **Note:** the showcase runner `analytics/readme_index.sql` uses **absolute paths** (`/analytics/...`, `/search/...`) for reliable execution **inside the container** and in **CI**. When running from your host, you can call the individual files from `analytics/` as usual.
 
 ---
 
@@ -27,6 +28,7 @@ Built from Goodbooks-like CSV seeds and focused on **advanced SQL** and **engine
 - [Incremental Loads (MERGE)](#incremental-loads-merge)
 - [Testing (pgTAP)](#testing-pgtap)
 - [Performance & Tuning](#performance--tuning)
+- [CI (GitHub Actions)](#ci-github-actions)
 - [Design Decisions](#design-decisions)
 - [License](#license)
 
@@ -143,8 +145,14 @@ docker compose up -d
 # 2) Sanity check: count rows
 psql -h localhost -U app -d appdb -c "SELECT COUNT(*) FROM dw.dim_books;"
 
-# 3) Run the showcase
-psql -h localhost -U app -d appdb -f analytics/readme_index.sql
+# 3) Run individual showcase queries (host → relative paths)
+psql -h localhost -U app -d appdb -f analytics/topN_by_tag.sql
+psql -h localhost -U app -d appdb -f analytics/quality_score.sql
+psql -h localhost -U app -d appdb -f analytics/grouping_sets.sql
+
+# 4) Or run the aggregator (inside container → absolute paths)
+docker exec -it sql_project-db-1 bash -lc "psql -U app -d appdb -f /analytics/readme_index.sql > /analytics/run.log 2>&1"
+docker cp sql_project-db-1:/analytics/run.log ./run.log
 ```
 
 Default credentials are set in `docker-compose.yml`:
@@ -185,7 +193,7 @@ psql -h localhost -U app -d appdb -f analytics/readme_index.sql
 
 ## Analytics Queries (how to run)
 
-Run each file individually:
+Run each file individually (host paths):
 
 ```bash
 psql -h localhost -U app -d appdb -f analytics/topN_by_tag.sql
@@ -193,10 +201,11 @@ psql -h localhost -U app -d appdb -f analytics/quality_score.sql
 psql -h localhost -U app -d appdb -f analytics/grouping_sets.sql
 ```
 
-Or run the aggregator:
+Or run the aggregator **inside the container** (absolute paths):
 
 ```bash
-psql -h localhost -U app -d appdb -f analytics/readme_index.sql
+docker exec -it sql_project-db-1 bash -lc "psql -U app -d appdb -f /analytics/readme_index.sql > /analytics/run.log 2>&1"
+docker cp sql_project-db-1:/analytics/run.log ./run.log
 ```
 
 The queries demonstrate:
@@ -210,8 +219,19 @@ The queries demonstrate:
 
 ## Search: FTS & Trigram
 
-- `search/fts.sql` builds a `tsvector` over `title || ' ' || authors` and runs a query (with GIN).
-- `search/trigram_fuzzy.sql` enables typo-tolerant matches on `title` using `pg_trgm` (GIN/GIST).
+Full-Text Search (tsvector/tsquery) and trigram fuzzy matching (`pg_trgm`).
+
+**From the container (absolute paths):**
+```bash
+docker exec -it sql_project-db-1 psql -U app -d appdb -f /search/fts.sql
+docker exec -it sql_project-db-1 psql -U app -d appdb -f /search/trigram_fuzzy.sql
+```
+
+**From the host (relative paths):**
+```bash
+psql -h localhost -U app -d appdb -f search/fts.sql
+psql -h localhost -U app -d appdb -f search/trigram_fuzzy.sql
+```
 
 Make sure the related indexes are defined in `ddl/03_indexes.sql`.
 
@@ -230,18 +250,20 @@ Make sure the related indexes are defined in `ddl/03_indexes.sql`.
 
 ## Testing (pgTAP)
 
-Light sanity checks to keep things green in CI:
+We use a custom image (`postgres:16` + **pgTAP**) so tests run identically locally and in CI.
 
 ```bash
-psql -h localhost -U app -d appdb -c "CREATE EXTENSION IF NOT EXISTS pgtap;"
-psql -h localhost -U app -d appdb -f tests/test_basic.sql
-psql -h localhost -U app -d appdb -f tests/test_queries.sql
+# enable extension & setup (idempotent)
+docker exec -it sql_project-db-1 psql -U app -d appdb -f /tests/pgtap_setup.sql
+
+# schema/load sanity
+docker exec -it sql_project-db-1 psql -U app -d appdb -f /tests/test_basic.sql
+
+# behavioral tests (showcase/search/indexes)
+docker exec -it sql_project-db-1 psql -U app -d appdb -f /tests/test_queries.sql
 ```
 
-What we test:
-- required tables/columns exist,
-- seeds loaded (row counts > 0),
-- key showcase queries return results and expected data types.
+Expect `ok ...` lines from pgTAP and a clean `finish()`.
 
 ---
 
@@ -251,6 +273,20 @@ What we test:
 - `ddl/04_matviews.sql` defines materialized views with a unique index → supports `REFRESH CONCURRENTLY`.
 - `tuning/refresh_matview.sql` illustrates refresh timings and the impact of indexes.
 - (Optional) `ddl/01_tables.sql` can switch `fact_ratings` to **partitioned** by hash(`user_id`) for larger datasets.
+
+---
+
+## CI (GitHub Actions)
+
+> Badge will be added after the first green run.
+
+Template (replace `USER/REPO`):
+
+```markdown
+[![CI](https://github.com/USER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/REPO/actions/workflows/ci.yml)
+```
+
+CI spins up the container, runs init, executes pgTAP tests and the showcase (`readme_index.sql`), and uploads `run.log` as an artifact.
 
 ---
 

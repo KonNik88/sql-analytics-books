@@ -1,0 +1,57 @@
+name: SQL CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: appdb
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd="pg_isready -U app -d appdb"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Wait for Postgres healthy
+        env:
+          PGPASSWORD: app
+        run: |
+          for i in {1..20}; do
+            if psql -h localhost -U app -d appdb -c "SELECT 1;" > /dev/null 2>&1; then
+              echo "Postgres is up"; break
+            fi
+            echo "Waiting for Postgres..."; sleep 2
+          done
+
+      - name: Init DB (schema, seeds, indexes, matviews)
+        env:
+          PGPASSWORD: app
+        run: |
+          psql -h localhost -U app -d appdb -v ON_ERROR_STOP=1 -f init/local_init.sql
+
+      - name: Enable pgTAP and run sanity tests
+        env:
+          PGPASSWORD: app
+        run: |
+          psql -h localhost -U app -d appdb -c "CREATE EXTENSION IF NOT EXISTS pgtap;"
+          psql -h localhost -U app -d appdb -f tests/test_basic.sql
+
+      - name: Run showcase queries
+        env:
+          PGPASSWORD: app
+        run: |
+          psql -h localhost -U app -d appdb -f analytics/readme_index.sql
