@@ -8,10 +8,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-
-    # фиксируем имя compose-проекта — стабильные имена контейнеров
     env:
-      COMPOSE_PROJECT_NAME: sql_project
+      COMPOSE_PROJECT_NAME: sql_project  # фиксируем имя compose-проекта
 
     steps:
       - name: Checkout
@@ -27,59 +25,71 @@ jobs:
         run: |
           for i in {1..300}; do
             if docker compose exec -T db pg_isready -U app -d appdb; then
-              echo "Postgres socket is up"
-              exit 0
+              echo "Postgres socket is up"; exit 0
             fi
             echo "Waiting for Postgres socket... ($i/300)"
             sleep 2
           done
           echo "Postgres did not become ready (socket)" && exit 1
 
-      - name: Wait for DB init to finish (schema + data + matview)
+      - name: Wait for schema, data and matview (robust retries)
+        shell: bash
         run: |
-          set -e
+          set -u
 
-          # Ждём появления схемы/таблиц
-          for i in {1..600}; do
-            has_books=$(docker compose exec -T db psql -U app -d appdb -tAc "SELECT to_regclass('dw.dim_books') IS NOT NULL")
-            if [ "$has_books" = "t" ]; then
-              echo "dw.dim_books exists"
-              break
-            fi
-            echo "Waiting for dw.dim_books to appear... ($i/600)"
-            sleep 2
-          done
+          run_sql() {
+            # Выполняем psql, на любые ошибки/рестарты возвращаем специальный маркер
+            docker compose exec -T db bash -lc "psql -U app -d appdb -tAc \"$1\"" 2>/dev/null || echo "__ERR__"
+          }
 
-          # Ждём пока загрузятся книги (ориентир: 10k)
-          for i in {1..600}; do
-            cnt=$(docker compose exec -T db psql -U app -d appdb -tAc "SELECT COALESCE((SELECT COUNT(*) FROM dw.dim_books),0)")
-            echo "dw.dim_books count: $cnt"
-            if [ "$cnt" -ge 10000 ]; then
-              break
-            fi
-            sleep 2
-          done
+          wait_bool() {
+            local sql="$1"; local what="$2"; local tries="$3"
+            for ((i=1;i<=tries;i++)); do
+              out=$(run_sql "$sql")
+              if [[ "$out" == "t" ]]; then
+                echo "$what: OK"; return 0
+              fi
+              echo "Waiting for $what... ($i/$tries) out='$out'"
+              sleep 2
+            done
+            echo "Timeout while waiting for $what"; return 1
+          }
 
-          # Ждём матвью
-          for i in {1..600}; do
-            has_mv=$(docker compose exec -T db psql -U app -d appdb -tAc "SELECT to_regclass('dw.mv_top_books_quality') IS NOT NULL")
-            if [ "$has_mv" = "t" ]; then
-              echo "dw.mv_top_books_quality exists"
-              break
-            fi
-            echo "Waiting for dw.mv_top_books_quality... ($i/600)"
-            sleep 2
-          done
+          wait_count_ge() {
+            local sql="$1"; local what="$2"; local ge="$3"; local tries="$4"
+            for ((i=1;i<=tries;i++)); do
+              out=$(run_sql "$sql")
+              # если ошибка подключения — продолжаем ждать
+              if [[ "$out" == "__ERR__" || -z "$out" ]]; then
+                echo "Waiting for $what (db not ready)... ($i/$tries)"
+                sleep 2
+                continue
+              fi
+              # чистим пробелы и перевод строки
+              out=$(echo "$out" | tr -d '[:space:]')
+              if [[ "$out" =~ ^[0-9]+$ && "$out" -ge "$ge" ]]; then
+                echo "$what: $out (>= $ge) — OK"; return 0
+              fi
+              echo "Waiting for $what... now=$out need>=$ge ($i/$tries)"
+              sleep 2
+            done
+            echo "Timeout while waiting for $what"; return 1
+          }
 
-          # Бридж тегов (ориентир: ~1e6)
-          for i in {1..600}; do
-            bt=$(docker compose exec -T db psql -U app -d appdb -tAc "SELECT COALESCE((SELECT COUNT(*) FROM dw.bridge_book_tags),0)")
-            echo "dw.bridge_book_tags count: $bt"
-            if [ "$bt" -ge 900000 ]; then
-              break
-            fi
-            sleep 2
-          done
+          # 1) есть ли схема/таблица
+          wait_bool "SELECT to_regclass('dw.dim_books') IS NOT NULL" "dw.dim_books exists" 600
+
+          # 2) догрузились ли книги (ожидаем 10k)
+          wait_count_ge "SELECT COALESCE((SELECT COUNT(*) FROM dw.dim_books),0)" "dw.dim_books count" 10000 600
+
+          # 3) появилась ли матвью
+          wait_bool "SELECT to_regclass('dw.mv_top_books_quality') IS NOT NULL" "dw.mv_top_books_quality exists" 600
+
+          # 4) загрузился ли bridge (ориентир ~1e6)
+          wait_count_ge "SELECT COALESCE((SELECT COUNT(*) FROM dw.bridge_book_tags),0)" "dw.bridge_book_tags count" 900000 600
+
+          # перестрахуемся: рефреш матвью (если уникальный индекс есть — concurrent)
+          run_sql "REFRESH MATERIALIZED VIEW CONCURRENTLY dw.mv_top_books_quality" >/dev/null
 
       - name: Ensure pgTAP (idempotent)
         run: docker compose exec -T db psql -U app -d appdb -f /tests/pgtap_setup.sql
