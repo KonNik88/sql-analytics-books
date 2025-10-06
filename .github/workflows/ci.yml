@@ -2,56 +2,56 @@ name: SQL CI
 
 on:
   push:
+    branches: [ main ]
   pull_request:
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: app
-          POSTGRES_PASSWORD: app
-          POSTGRES_DB: appdb
-        ports:
-          - "5432:5432"
-        options: >-
-          --health-cmd="pg_isready -U app -d appdb"
-          --health-interval=10s --health-timeout=5s --health-retries=10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install psql client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Wait for Postgres healthy
-        env:
-          PGPASSWORD: app
+      - name: Compose up (build image with pgTAP)
+        run: docker compose up -d --build
+
+      - name: Wait for Postgres in container
         run: |
-          for i in {1..20}; do
-            if psql -h localhost -U app -d appdb -c "SELECT 1;" > /dev/null 2>&1; then
-              echo "Postgres is up"; break
+          for i in {1..40}; do
+            if docker exec sql_project-db-1 pg_isready -U app -d appdb; then
+              echo "Postgres is up"
+              exit 0
             fi
-            echo "Waiting for Postgres..."; sleep 2
+            echo "Waiting for Postgres..."
+            sleep 2
           done
+          echo "Postgres did not become ready" && exit 1
 
-      - name: Init DB (schema, seeds, indexes, matviews)
-        env:
-          PGPASSWORD: app
-        run: |
-          psql -h localhost -U app -d appdb -v ON_ERROR_STOP=1 -f init/local_init.sql
+      # init уже делает наш /docker-entrypoint-initdb.d, но можно прогнать idempotent setup
+      - name: Ensure pgTAP (idempotent)
+        run: docker exec sql_project-db-1 psql -U app -d appdb -f /tests/pgtap_setup.sql
 
-      - name: Enable pgTAP and run sanity tests
-        env:
-          PGPASSWORD: app
+      - name: Run pgTAP tests
         run: |
-          psql -h localhost -U app -d appdb -c "CREATE EXTENSION IF NOT EXISTS pgtap;"
-          psql -h localhost -U app -d appdb -f tests/test_basic.sql
+          docker exec sql_project-db-1 psql -U app -d appdb -f /tests/test_basic.sql
+          docker exec sql_project-db-1 psql -U app -d appdb -f /tests/test_queries.sql
 
-      - name: Run showcase queries
-        env:
-          PGPASSWORD: app
-        run: |
-          psql -h localhost -U app -d appdb -f analytics/readme_index.sql
+      - name: Run showcase (absolute paths inside container)
+        run: docker exec sql_project-db-1 bash -lc "psql -U app -d appdb -f /analytics/readme_index.sql > /analytics/run.log 2>&1"
+
+      - name: Copy run.log out
+        run: docker cp sql_project-db-1:/analytics/run.log ./analytics/run.log
+
+      - name: Upload run.log
+        uses: actions/upload-artifact@v4
+        with:
+          name: readme-runlog
+          path: ./analytics/run.log
+
+      - name: Compose down (cleanup)
+        if: always()
+        run: docker compose down -v
