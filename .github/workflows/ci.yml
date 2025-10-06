@@ -9,6 +9,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    env:
+      COMPOSE_PROJECT_NAME: sql_project   # фиксируем имя проекта
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,29 +25,28 @@ jobs:
       - name: Wait for Postgres in container
         run: |
           for i in {1..40}; do
-            if docker exec sql_project-db-1 pg_isready -U app -d appdb; then
-              echo "Postgres is up"
-              exit 0
+            if docker compose exec -T db pg_isready -U app -d appdb; then
+              echo "Postgres is up"; exit 0
             fi
-            echo "Waiting for Postgres..."
-            sleep 2
+            echo "Waiting for Postgres..."; sleep 2
           done
           echo "Postgres did not become ready" && exit 1
 
-      # init уже делает наш /docker-entrypoint-initdb.d, но можно прогнать idempotent setup
       - name: Ensure pgTAP (idempotent)
-        run: docker exec sql_project-db-1 psql -U app -d appdb -f /tests/pgtap_setup.sql
+        run: docker compose exec -T db psql -U app -d appdb -f /tests/pgtap_setup.sql
 
       - name: Run pgTAP tests
         run: |
-          docker exec sql_project-db-1 psql -U app -d appdb -f /tests/test_basic.sql
-          docker exec sql_project-db-1 psql -U app -d appdb -f /tests/test_queries.sql
+          docker compose exec -T db psql -U app -d appdb -f /tests/test_basic.sql
+          docker compose exec -T db psql -U app -d appdb -f /tests/test_queries.sql
 
       - name: Run showcase (absolute paths inside container)
-        run: docker exec sql_project-db-1 bash -lc "psql -U app -d appdb -f /analytics/readme_index.sql > /analytics/run.log 2>&1"
+        run: docker compose exec -T db bash -lc "psql -U app -d appdb -f /analytics/readme_index.sql > /analytics/run.log 2>&1"
 
       - name: Copy run.log out
-        run: docker cp sql_project-db-1:/analytics/run.log ./analytics/run.log
+        run: |
+          CID=$(docker compose ps -q db)
+          docker cp "$CID":/analytics/run.log ./analytics/run.log
 
       - name: Upload run.log
         uses: actions/upload-artifact@v4
