@@ -1,5 +1,4 @@
 # SQL Analytics (Books) — PostgreSQL
-
 [![CI](https://github.com/KonNik88/sql-analytics-books/actions/workflows/ci.yml/badge.svg)](https://github.com/KonNik88/sql-analytics-books/actions/workflows/ci.yml)
 
 Reproducible **SQL portfolio project** on PostgreSQL (books domain).  
