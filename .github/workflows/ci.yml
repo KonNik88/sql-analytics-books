@@ -8,9 +8,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-
     env:
-      COMPOSE_PROJECT_NAME: sql_project   # фиксируем имя проекта
+      COMPOSE_PROJECT_NAME: sql_project  # фиксируем имя проекта для стабильных имён контейнеров
 
     steps:
       - name: Checkout
@@ -22,15 +21,23 @@ jobs:
       - name: Compose up (build image with pgTAP)
         run: docker compose up -d --build
 
-      - name: Wait for Postgres in container
+      - name: Wait for Postgres in container (up to 10 min)
         run: |
-          for i in {1..40}; do
+          # ждём до 600 сек (300 * 2с), потому что init заливает 6M строк
+          for i in {1..300}; do
             if docker compose exec -T db pg_isready -U app -d appdb; then
-              echo "Postgres is up"; exit 0
+              echo "Postgres is up"
+              exit 0
             fi
-            echo "Waiting for Postgres..."; sleep 2
+            echo "Waiting for Postgres... ($i/300)"
+            sleep 2
           done
-          echo "Postgres did not become ready" && exit 1
+          echo "Postgres did not become ready in time"
+          echo "--- docker compose ps ---"
+          docker compose ps || true
+          echo "--- docker logs (last 200 lines) ---"
+          docker compose logs --no-color --tail=200 db || true
+          exit 1
 
       - name: Ensure pgTAP (idempotent)
         run: docker compose exec -T db psql -U app -d appdb -f /tests/pgtap_setup.sql
