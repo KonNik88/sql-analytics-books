@@ -1,5 +1,7 @@
 # SQL Analytics (Books) — PostgreSQL
 
+[![CI](https://github.com/KonNik88/sql-analytics-books/actions/workflows/ci.yml/badge.svg)](https://github.com/KonNik88/sql-analytics-books/actions/workflows/ci.yml)
+
 Reproducible **SQL portfolio project** on PostgreSQL (books domain).  
 Built from Goodbooks-like CSV seeds and focused on **advanced SQL** and **engineering good practices**.
 
@@ -13,6 +15,24 @@ Built from Goodbooks-like CSV seeds and focused on **advanced SQL** and **engine
 
 > Seeds are small (LFS-free) so CI remains fast.  
 > **Note:** the showcase runner `analytics/readme_index.sql` uses **absolute paths** (`/analytics/...`, `/search/...`) for reliable execution **inside the container** and in **CI**. When running from your host, you can call the individual files from `analytics/` as usual.
+
+---
+
+## Data source & Attribution
+
+This project uses the **goodbooks-10k** dataset by **Zygmunt Zając** (zygmuntz), hosted on GitHub:  
+https://github.com/zygmuntz/goodbooks-10k
+
+**What we use / how we adapted it**
+- We vendor the CSVs (`books.csv`, `ratings.csv`, `tags.csv`, `book_tags.csv`, `to_read.csv`) from the repository above.
+- Files are lightly **reformatted** for reproducibility and CI (UTF-8 with headers; small curated subset to keep CI fast).
+- `book_tags.csv` in the source uses `goodreads_book_id`; our ETL maps it to internal `book_id` via a lookup built from `dim_books.meta`.
+
+Please refer to the **license/terms** in the upstream repository for usage conditions.  
+“Goodreads” and related names are trademarks of their respective owners; this project is for educational/demo purposes only.
+
+Pinned upstream version: `zygmuntz/goodbooks-10k@6dd165b555a7b47b2dd36743a425776e641ff50c` (accessed: 2018-10-01)  
+Permalink: https://github.com/zygmuntz/goodbooks-10k/tree/6dd165b555a7b47b2dd36743a425776e641ff50c
 
 ---
 

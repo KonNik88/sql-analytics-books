@@ -34,3 +34,12 @@ tuning/*.out
 
 # Archives you might drop in seeds locally
 seeds/*.zip
+
+# local artifacts & logs
+artifacts/
+run.log
+
+# OS/IDE noise
+.DS_Store
+Thumbs.db
+
