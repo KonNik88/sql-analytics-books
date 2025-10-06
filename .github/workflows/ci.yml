@@ -8,8 +8,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # фиксируем имя compose-проекта — стабильные имена контейнеров
     env:
-      COMPOSE_PROJECT_NAME: sql_project  # фиксируем имя проекта для стабильных имён контейнеров
+      COMPOSE_PROJECT_NAME: sql_project
 
     steps:
       - name: Checkout
@@ -21,21 +23,63 @@ jobs:
       - name: Compose up (build image with pgTAP)
         run: docker compose up -d --build
 
-      - name: Wait for Postgres in container (up to 10 min)
+      - name: Wait for Postgres socket (pg_isready)
         run: |
           for i in {1..300}; do
             if docker compose exec -T db pg_isready -U app -d appdb; then
-              echo "Postgres is up"; exit 0
+              echo "Postgres socket is up"
+              exit 0
             fi
-            echo "Waiting for Postgres... ($i/300)"
+            echo "Waiting for Postgres socket... ($i/300)"
             sleep 2
           done
-          echo "Postgres did not become ready in time"
-          echo "--- docker compose ps ---"
-          docker compose ps || true
-          echo "--- docker logs (last 200 lines) ---"
-          docker compose logs --no-color --tail=200 db || true
-          exit 1
+          echo "Postgres did not become ready (socket)" && exit 1
+
+      - name: Wait for DB init to finish (schema + data + matview)
+        run: |
+          set -e
+
+          # Ждём появления схемы/таблиц
+          for i in {1..600}; do
+            has_books=$(docker compose exec -T db psql -U app -d appdb -tAc "SELECT to_regclass('dw.dim_books') IS NOT NULL")
+            if [ "$has_books" = "t" ]; then
+              echo "dw.dim_books exists"
+              break
+            fi
+            echo "Waiting for dw.dim_books to appear... ($i/600)"
+            sleep 2
+          done
+
+          # Ждём пока загрузятся книги (ориентир: 10k)
+          for i in {1..600}; do
+            cnt=$(docker compose exec -T db psql -U app -d appdb -tAc "SELECT COALESCE((SELECT COUNT(*) FROM dw.dim_books),0)")
+            echo "dw.dim_books count: $cnt"
+            if [ "$cnt" -ge 10000 ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          # Ждём матвью
+          for i in {1..600}; do
+            has_mv=$(docker compose exec -T db psql -U app -d appdb -tAc "SELECT to_regclass('dw.mv_top_books_quality') IS NOT NULL")
+            if [ "$has_mv" = "t" ]; then
+              echo "dw.mv_top_books_quality exists"
+              break
+            fi
+            echo "Waiting for dw.mv_top_books_quality... ($i/600)"
+            sleep 2
+          done
+
+          # Бридж тегов (ориентир: ~1e6)
+          for i in {1..600}; do
+            bt=$(docker compose exec -T db psql -U app -d appdb -tAc "SELECT COALESCE((SELECT COUNT(*) FROM dw.bridge_book_tags),0)")
+            echo "dw.bridge_book_tags count: $bt"
+            if [ "$bt" -ge 900000 ]; then
+              break
+            fi
+            sleep 2
+          done
 
       - name: Ensure pgTAP (idempotent)
         run: docker compose exec -T db psql -U app -d appdb -f /tests/pgtap_setup.sql
@@ -45,14 +89,12 @@ jobs:
           docker compose exec -T db psql -U app -d appdb -f /tests/test_basic.sql
           docker compose exec -T db psql -U app -d appdb -f /tests/test_queries.sql
 
-      # >>> ЭТОТ шаг создаёт /analytics/run.log внутри контейнера <<<
-      - name: Run showcase (produces /analytics/run.log)
+      - name: Run showcase (absolute paths inside container)
         run: docker compose exec -T db bash -lc "psql -U app -d appdb -f /analytics/readme_index.sql > /analytics/run.log 2>&1"
 
       - name: Show /analytics/run.log (tail)
         if: always()
         run: |
-          set -e
           CID=$(docker compose ps -q db || true)
           if [ -n "$CID" ] && docker exec "$CID" test -f /analytics/run.log; then
             echo "----- tail /analytics/run.log -----"
